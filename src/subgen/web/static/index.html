@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SubGen · 中文字幕生成器</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">字幕</div>
+      <div>
+        <h1>SubGen</h1>
+        <p class="subtitle">日英视频 → 简体中文 .srt 字幕生成器</p>
+      </div>
+    </div>
+    <div id="env-badges" class="env-badges">
+      <span class="badge">检查环境中…</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Step 1: Input & Settings -->
+    <section id="setup-card" class="card">
+      <div class="input-mode-tabs">
+        <button type="button" class="tab active" data-mode="upload">拖拽 / 上传文件</button>
+        <button type="button" class="tab" data-mode="local">本地文件路径（推荐大视频）</button>
+      </div>
+
+      <form id="job-form">
+        <!-- Upload Mode -->
+        <div id="panel-upload" class="mode-panel active">
+          <div id="dropzone" class="dropzone" tabindex="0">
+            <input id="file-input" type="file" accept="video/*,audio/*,.mkv,.ts,.srt" hidden />
+            <div class="dropzone-icon">🎬</div>
+            <p class="dropzone-title">将日文 / 英文视频、音频或 .srt 拖到此处</p>
+            <p class="dropzone-hint">支持 MP4 / MKV / MOV / MP3 / WAV / SRT · 点击选择文件</p>
+            <div id="selected-file" class="selected-file hidden"></div>
+          </div>
+        </div>
+
+        <!-- Local Path Mode -->
+        <div id="panel-local" class="mode-panel">
+          <label class="field">
+            <span>本地文件绝对路径</span>
+            <input id="local-path" type="text" placeholder="/Users/you/Movies/episode01.mp4" />
+            <small>无需通过浏览器上传大文件，生成的 .zh.srt 将直接保存在原视频同目录。</small>
+          </label>
+        </div>
+
+        <!-- Settings Grid -->
+        <div class="settings-grid">
+          <label class="field">
+            <span>源语言 (Source Language)</span>
+            <select id="source-lang">
+              <option value="auto" selected>自动检测 (Auto · 日/英)</option>
+              <option value="ja">日语 (Japanese)</option>
+              <option value="en">英语 (English)</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>本地 Whisper 模型</span>
+            <select id="whisper-model">
+              <option value="large-v3-turbo" selected>large-v3-turbo (推荐 · 速度与精度平衡)</option>
+              <option value="large-v3">large-v3 (最高精度 · 适合复杂日语)</option>
+              <option value="medium">medium (轻量快速)</option>
+              <option value="small">small (极速测试)</option>
+              <option value="base">base (最轻量)</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>本地 ASR 引擎</span>
+            <select id="asr-backend">
+              <option value="auto" selected>自动选择 (Apple Silicon 优先 MLX)</option>
+              <option value="mlx">mlx-whisper (Apple Silicon GPU)</option>
+              <option value="faster-whisper">faster-whisper (CTranslate2 + VAD)</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>翻译 LLM 服务</span>
+            <select id="translator">
+              <option value="openai" selected>OpenAI (默认 gpt-6-luna) / 兼容接口 (DeepSeek / Ollama)</option>
+              <option value="gemini">Google Gemini (gemini-2.5-flash)</option>
+            </select>
+          </label>
+        </div>
+
+        <details class="advanced-box">
+          <summary>高级选项（API Key / 自定义模型 / 术语表 / 双语）</summary>
+          <div class="settings-grid" style="margin-top: 12px;">
+            <label class="field">
+              <span>LLM 模型名称（留空使用默认）</span>
+              <input id="translation-model" type="text" placeholder="gpt-6-luna / gpt-5-nano / gemini-2.5-flash" />
+            </label>
+
+            <label class="field">
+              <span>API Key（留空读取 .env 配置）</span>
+              <input id="api-key" type="password" placeholder="已配置 .env 时无需填写" autocomplete="off" />
+            </label>
+
+            <label class="field" id="base-url-field">
+              <span>OpenAI 兼容 Base URL（可选）</span>
+              <input id="api-base-url" type="text" placeholder="https://api.deepseek.com/v1" />
+            </label>
+
+            <label class="field">
+              <span>每批翻译句数 (Batch Size)</span>
+              <input id="batch-size" type="number" min="5" max="100" value="30" />
+            </label>
+          </div>
+
+          <label class="field" style="margin-top: 12px;">
+            <span>背景说明 / 专有名词术语表（可选，大幅提升人名和术语准确度）</span>
+            <textarea id="context-prompt" rows="2" placeholder="例如：这是一期科技播客；固定译名：Antigravity 保留英文，田中太郎译作太郎"></textarea>
+          </label>
+
+          <div class="checkbox-row">
+            <label class="checkbox">
+              <input id="bilingual" type="checkbox" />
+              <span>默认输出双语字幕（中文 + 原文）</span>
+            </label>
+            <label class="checkbox">
+              <input id="save-source" type="checkbox" />
+              <span>同时保存原始日/英 .srt</span>
+            </label>
+          </div>
+        </details>
+
+        <div class="actions">
+          <button id="start-btn" type="submit" class="btn primary">开始生成简体中文字幕</button>
+          <span id="form-error" class="error-text"></span>
+        </div>
+      </form>
+    </section>
+
+    <!-- Step 2: Live Progress -->
+    <section id="progress-card" class="card hidden">
+      <div class="progress-header">
+        <div>
+          <h2 id="job-title">正在处理…</h2>
+          <p id="progress-msg" class="muted">准备中…</p>
+        </div>
+        <span id="progress-pct" class="pct">0%</span>
+      </div>
+      <div class="progress-track">
+        <div id="progress-bar" class="progress-fill" style="width: 0%;"></div>
+      </div>
+      <div class="stage-pills">
+        <span class="pill" data-stage="extracting">1. 提取音频</span>
+        <span class="pill" data-stage="transcribing">2. 本地 Whisper 识别</span>
+        <span class="pill" data-stage="translating">3. LLM 上下文翻译</span>
+        <span class="pill" data-stage="writing">4. 生成 .srt</span>
+      </div>
+    </section>
+
+    <!-- Step 3: Preview & Editor Workspace -->
+    <section id="workspace-card" class="card hidden">
+      <div class="workspace-header">
+        <div>
+          <h2>字幕预览与编辑</h2>
+          <p id="workspace-meta" class="muted"></p>
+        </div>
+        <div class="download-group">
+          <button id="btn-dl-zh" class="btn primary" type="button">⬇ 下载简体中文 .srt</button>
+          <button id="btn-dl-bilingual" class="btn secondary" type="button">⬇ 下载双语 .srt</button>
+          <button id="btn-dl-source" class="btn ghost" type="button">⬇ 下载原文 .srt</button>
+        </div>
+      </div>
+
+      <div class="workspace-grid">
+        <!-- Video Preview -->
+        <div id="player-pane" class="player-pane">
+          <div class="video-wrap">
+            <video id="video-player" controls crossorigin="anonymous"></video>
+          </div>
+          <div class="player-controls">
+            <label class="inline-select">
+              <span>预览字幕轨道：</span>
+              <select id="track-mode">
+                <option value="translated" selected>简体中文</option>
+                <option value="bilingual">双语（中 + 原文）</option>
+                <option value="source">仅原文</option>
+                <option value="off">关闭字幕</option>
+              </select>
+            </label>
+            <span id="save-indicator" class="save-indicator">修改自动同步到预览与 .srt</span>
+          </div>
+        </div>
+
+        <!-- Cue Editor -->
+        <div class="editor-pane">
+          <div class="editor-toolbar">
+            <input id="cue-search" type="search" placeholder="搜索原文或中文字幕…" />
+            <span id="cue-count" class="muted">0 条字幕</span>
+          </div>
+          <div id="cue-list" class="cue-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
