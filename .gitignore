@@ -16,8 +16,9 @@ build/
 .env.*
 !.env.example
 
-# Runtime uploads & generated artifacts
+# Runtime uploads, local model cache & generated artifacts
 .subgen_uploads/
+.subgen_models/
 
 # macOS metadata & AppleDouble files (exFAT external drives)
 .DS_Store

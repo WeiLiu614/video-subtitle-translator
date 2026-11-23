@@ -196,7 +196,7 @@ def test_faster_whisper_backend_cuda_falls_back_to_cpu(tmp_path: Path):
     init_calls: list[tuple[str, str, str]] = []
 
     class FakeWhisperModel:
-        def __init__(self, model_id, device="auto", compute_type="default"):
+        def __init__(self, model_id, device="auto", compute_type="default", download_root=None):
             init_calls.append((model_id, device, compute_type))
             if device == "cuda":
                 raise RuntimeError("Library cublas64_12.dll is not found")
@@ -215,3 +215,23 @@ def test_faster_whisper_backend_cuda_falls_back_to_cpu(tmp_path: Path):
     assert init_calls == [("large-v3-turbo", "cuda", "float16"), ("large-v3-turbo", "cpu", "int8")]
     assert result.language == "en"
     assert result.segments[0].source_text == "Hello world"
+
+
+def test_configure_model_cache_sets_hf_env_vars(tmp_path: Path, monkeypatch):
+    import os
+    from subgen.config import configure_model_cache
+
+    custom_cache = tmp_path / "lexar_models"
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.delenv("HF_XET_CACHE", raising=False)
+    monkeypatch.setenv("SUBGEN_MODEL_CACHE_DIR", str(custom_cache))
+
+    resolved = configure_model_cache()
+    assert resolved == custom_cache.resolve()
+    assert (custom_cache / "hub").is_dir()
+    assert (custom_cache / "xet").is_dir()
+    assert os.environ["HF_HOME"] == str(custom_cache.resolve())
+    assert os.environ["HF_HUB_CACHE"] == str((custom_cache / "hub").resolve())
+    assert os.environ["HF_XET_CACHE"] == str((custom_cache / "xet").resolve())
+

@@ -95,6 +95,7 @@ class AppSettings:
     default_translator: str = "openai"
     default_gemini_model: str = DEFAULT_GEMINI_MODEL
     default_openai_model: str = DEFAULT_OPENAI_MODEL
+    model_cache_dir: str | None = None
 
 
 def load_settings(env_file: Path | None = None) -> AppSettings:
@@ -107,6 +108,7 @@ def load_settings(env_file: Path | None = None) -> AppSettings:
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or None
     openai_key = os.getenv("OPENAI_API_KEY") or None
     openai_base_url = os.getenv("OPENAI_BASE_URL") or None
+    model_cache_dir = os.getenv("SUBGEN_MODEL_CACHE_DIR") or os.getenv("HF_HOME") or None
 
     default_translator = os.getenv("SUBGEN_TRANSLATOR")
     if not default_translator:
@@ -126,7 +128,33 @@ def load_settings(env_file: Path | None = None) -> AppSettings:
         default_translator=default_translator,
         default_gemini_model=os.getenv("SUBGEN_GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
         default_openai_model=os.getenv("SUBGEN_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
+        model_cache_dir=model_cache_dir,
     )
+
+
+def get_model_cache_dir(cache_dir: str | Path | None = None) -> Path | None:
+    """Return the configured local model cache root directory, or None for default (~/.cache/huggingface)."""
+    raw = str(cache_dir).strip() if cache_dir is not None else (load_settings().model_cache_dir or "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
+def configure_model_cache(cache_dir: str | Path | None = None) -> Path | None:
+    """Configure Hugging Face cache env vars (HF_HOME, HF_HUB_CACHE, HF_XET_CACHE) to store Whisper models."""
+    root = get_model_cache_dir(cache_dir)
+    if root is None:
+        return None
+
+    hub_dir = root / "hub"
+    xet_dir = root / "xet"
+    hub_dir.mkdir(parents=True, exist_ok=True)
+    xet_dir.mkdir(parents=True, exist_ok=True)
+
+    os.environ["HF_HOME"] = str(root)
+    os.environ["HF_HUB_CACHE"] = str(hub_dir)
+    os.environ["HF_XET_CACHE"] = str(xet_dir)
+    return root
 
 
 def resolve_mlx_model_repo(model_name: str) -> str:

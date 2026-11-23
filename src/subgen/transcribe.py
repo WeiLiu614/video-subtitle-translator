@@ -9,6 +9,7 @@ from typing import Callable, Protocol
 
 from subgen.audio import load_wav_as_float32
 from subgen.config import (
+    configure_model_cache,
     resolve_faster_whisper_model,
     resolve_mlx_model_repo,
     resolve_openvino_model_repo,
@@ -90,6 +91,7 @@ class MLXWhisperBackend:
         model_name: str = "large-v3-turbo",
         on_progress: ProgressCallback | None = None,
     ) -> TranscriptionResult:
+        cache_root = configure_model_cache()
         import mlx_whisper  # type: ignore[import-untyped]
 
         resolved_model = "large-v3-turbo" if model_name == "auto" else model_name
@@ -97,11 +99,19 @@ class MLXWhisperBackend:
         if on_progress:
             on_progress(5.0, f"Loading audio and MLX Whisper model ({repo_id})...")
 
+        # Resolve into the configured custom cache directory explicitly so models always land there.
+        model_target = repo_id
+        candidate_dir = Path(repo_id)
+        if cache_root is not None and not (candidate_dir.exists() and candidate_dir.is_dir()):
+            from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
+
+            model_target = str(snapshot_download(repo_id=repo_id, cache_dir=str(cache_root / "hub")))
+
         audio = load_wav_as_float32(wav_path)
         duration = float(len(audio)) / 16000.0 if len(audio) > 0 else 0.0
 
         kwargs: dict = {
-            "path_or_hf_repo": repo_id,
+            "path_or_hf_repo": model_target,
             "word_timestamps": True,
             "condition_on_previous_text": False,
             "verbose": False,
@@ -160,6 +170,7 @@ class FasterWhisperBackend:
         self.compute_type = compute_type
 
     def _load_model(self, model_id: str, on_progress: ProgressCallback | None = None):
+        cache_root = configure_model_cache()
         from faster_whisper import WhisperModel  # type: ignore[import-untyped]
 
         device = self.device
@@ -173,8 +184,12 @@ class FasterWhisperBackend:
                 device = "cpu"
                 compute_type = "int8"
 
+        model_kwargs: dict = {"device": device, "compute_type": compute_type}
+        if cache_root is not None:
+            model_kwargs["download_root"] = str(cache_root / "hub")
+
         try:
-            return WhisperModel(model_id, device=device, compute_type=compute_type), device, compute_type
+            return WhisperModel(model_id, **model_kwargs), device, compute_type
         except Exception as exc:
             # On Windows, NVIDIA GPU may exist without cuBLAS/cuDNN DLLs installed; degrade cleanly to CPU int8.
             if device == "cuda":
@@ -183,7 +198,10 @@ class FasterWhisperBackend:
                         8.0,
                         f"CUDA runtime unavailable ({exc}); falling back to CPU (int8)...",
                     )
-                return WhisperModel(model_id, device="cpu", compute_type="int8"), "cpu", "int8"
+                fallback_kwargs: dict = {"device": "cpu", "compute_type": "int8"}
+                if cache_root is not None:
+                    fallback_kwargs["download_root"] = str(cache_root / "hub")
+                return WhisperModel(model_id, **fallback_kwargs), "cpu", "int8"
             raise
 
     def transcribe(
@@ -266,12 +284,16 @@ class OpenVINOWhisperBackend:
         self.compute_type = compute_type
 
     def _resolve_local_model_dir(self, repo_or_path: str) -> str:
+        cache_root = configure_model_cache()
         candidate = Path(repo_or_path)
         if candidate.exists() and candidate.is_dir():
             return str(candidate)
         from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
 
-        return str(snapshot_download(repo_id=repo_or_path))
+        dl_kwargs: dict = {"repo_id": repo_or_path}
+        if cache_root is not None:
+            dl_kwargs["cache_dir"] = str(cache_root / "hub")
+        return str(snapshot_download(**dl_kwargs))
 
     def _create_pipeline(self, model_dir: str, on_progress: ProgressCallback | None = None):
         import openvino_genai as ov_genai  # type: ignore[import-untyped]

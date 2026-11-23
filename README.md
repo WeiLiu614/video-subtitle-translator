@@ -229,6 +229,7 @@ When `--asr auto` and `--whisper-model auto` (the defaults) are used, SubGen ins
 | `SUBGEN_GEMINI_MODEL` | `gemini-4-hydrogen` | Default Gemini model |
 | `SUBGEN_ASR_BACKEND` | `auto` | Default local Whisper backend (`auto`, `mlx`, `faster-whisper`, `openvino`) |
 | `SUBGEN_WHISPER_MODEL` | `auto` | Default Whisper model (`auto` = hardware-selected, or explicit model name) |
+| `SUBGEN_MODEL_CACHE_DIR` | `~/.cache/huggingface` | Optional custom folder (e.g. an external SSD) to store downloaded Whisper models |
 
 ---
 

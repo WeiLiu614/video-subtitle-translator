@@ -25,6 +25,8 @@ from subgen.config import (
     DEFAULT_OPENAI_MODEL,
     SUPPORTED_SUBTITLE_EXTENSIONS,
     WHISPER_MODEL_CHOICES,
+    configure_model_cache,
+    get_model_cache_dir,
     load_settings,
 )
 from subgen.hardware import detect_hardware, has_module
@@ -95,6 +97,7 @@ class SegmentsUpdatePayload(BaseModel):
 
 def create_app(upload_root: Path | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
+    configure_model_cache()
     app = FastAPI(title="SubGen Web UI", version=__version__)
     jobs: dict[str, JobRecord] = {}
     storage_root = upload_root or UPLOAD_ROOT
@@ -125,6 +128,7 @@ def create_app(upload_root: Path | None = None) -> FastAPI:
             "version": __version__,
             "apple_silicon": hw.is_apple_silicon,
             "hardware": hw.model_dump(),
+            "model_cache_dir": str(get_model_cache_dir()) if get_model_cache_dir() else None,
             "ffmpeg_available": ffmpeg_path is not None,
             "asr_backends": {
                 "mlx": has_module("mlx_whisper"),

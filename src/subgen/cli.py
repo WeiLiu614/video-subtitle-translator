@@ -22,7 +22,7 @@ from rich.table import Table
 
 from subgen import __version__
 from subgen.audio import FFmpegNotFoundError, find_ffmpeg
-from subgen.config import load_settings
+from subgen.config import configure_model_cache, get_model_cache_dir, load_settings
 from subgen.hardware import detect_hardware, has_module
 from subgen.models import PipelineConfig, ProgressEvent
 from subgen.pipeline import run_pipeline
@@ -35,6 +35,7 @@ console = Console()
 @click.version_option(__version__, "-V", "--version", prog_name="subgen")
 def main() -> None:
     """SubGen — Generate Simplified Chinese (.srt) subtitles for Japanese & English videos."""
+    configure_model_cache()
 
 
 @main.command("generate")
@@ -193,6 +194,12 @@ def doctor_cmd() -> None:
         "Auto Whisper Plan",
         "[cyan]AUTO[/cyan]",
         f"{hw.recommended_backend} | device={hw.recommended_device} | precision={hw.recommended_compute_type} | model={hw.recommended_whisper_model}",
+    )
+    cache_dir = get_model_cache_dir()
+    table.add_row(
+        "Model Cache Dir",
+        "[green]CUSTOM[/green]" if cache_dir else "[dim]DEFAULT[/dim]",
+        str(cache_dir) if cache_dir else "~/.cache/huggingface (set SUBGEN_MODEL_CACHE_DIR to customize)",
     )
     table.add_row("Python", "[green]OK[/green]", sys.version.split()[0])
 
