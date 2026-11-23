@@ -1,15 +1,25 @@
-"""Local Whisper ASR backends (MLX Whisper for Apple Silicon & faster-whisper) and segment cleanup."""
+"""Local Whisper ASR backends (MLX for Apple Silicon, faster-whisper for NVIDIA CUDA/CPU, OpenVINO for Intel iGPU)."""
 
 from __future__ import annotations
 
-import importlib.util
 import platform
 import re
 from pathlib import Path
 from typing import Callable, Protocol
 
 from subgen.audio import load_wav_as_float32
-from subgen.config import resolve_mlx_model_repo
+from subgen.config import (
+    resolve_faster_whisper_model,
+    resolve_mlx_model_repo,
+    resolve_openvino_model_repo,
+)
+from subgen.hardware import (
+    ASRPlan,
+    HardwareProfile,
+    detect_hardware,
+    has_module,
+    resolve_asr_plan,
+)
 from subgen.models import (
     ASRBackendName,
     SourceLanguage,
@@ -34,57 +44,38 @@ class ASRBackend(Protocol):
         self,
         wav_path: Path,
         source_lang: SourceLanguage = "auto",
-        model_name: str = "large-v3-turbo",
+        model_name: str = "auto",
         on_progress: ProgressCallback | None = None,
     ) -> TranscriptionResult: ...
 
 
 def is_apple_silicon() -> bool:
     """Return True when running on macOS arm64."""
-    return platform.system() == "Darwin" and platform.machine() == "arm64"
-
-
-def has_module(module_name: str) -> bool:
-    """Return True if a Python package is importable."""
-    return importlib.util.find_spec(module_name) is not None
+    return platform.system() == "Darwin" and platform.machine().lower() in ("arm64", "aarch64")
 
 
 def resolve_asr_backend_name(requested: ASRBackendName = "auto") -> str:
-    """Resolve `auto` to the best installed local Whisper backend."""
-    if requested == "mlx":
-        if not has_module("mlx_whisper"):
-            raise RuntimeError(
-                "mlx-whisper is not installed. Install it with: pip install 'subgen[mlx]' (or pip install mlx-whisper)"
-            )
-        return "mlx"
+    """Resolve `auto` to the best installed local Whisper backend for current hardware."""
+    return resolve_asr_plan(requested_backend=requested, requested_model="auto").backend
 
-    if requested == "faster-whisper":
-        if not has_module("faster_whisper"):
-            raise RuntimeError(
-                "faster-whisper is not installed. Install it with: pip install 'subgen[faster-whisper]'"
-            )
-        return "faster-whisper"
 
-    # auto mode
-    if is_apple_silicon() and has_module("mlx_whisper"):
-        return "mlx"
-    if has_module("faster_whisper"):
-        return "faster-whisper"
-    if has_module("mlx_whisper"):
-        return "mlx"
-
-    raise RuntimeError(
-        "No local Whisper backend is installed. Install `mlx-whisper` (recommended on Apple Silicon) "
-        "or `faster-whisper`."
+def create_asr_backend(
+    requested: ASRBackendName = "auto",
+    *,
+    requested_model: str = "auto",
+    hardware: HardwareProfile | None = None,
+) -> tuple[ASRBackend, ASRPlan]:
+    """Resolve hardware + installed packages and instantiate the matching ASR backend."""
+    plan = resolve_asr_plan(
+        requested_backend=requested,
+        requested_model=requested_model,
+        hardware=hardware,
     )
-
-
-def create_asr_backend(requested: ASRBackendName = "auto") -> ASRBackend:
-    """Instantiate the selected ASR backend."""
-    resolved = resolve_asr_backend_name(requested)
-    if resolved == "mlx":
-        return MLXWhisperBackend()
-    return FasterWhisperBackend()
+    if plan.backend == "mlx":
+        return MLXWhisperBackend(), plan
+    if plan.backend == "openvino":
+        return OpenVINOWhisperBackend(device=plan.device, compute_type=plan.compute_type), plan
+    return FasterWhisperBackend(device=plan.device, compute_type=plan.compute_type), plan
 
 
 class MLXWhisperBackend:
@@ -101,7 +92,8 @@ class MLXWhisperBackend:
     ) -> TranscriptionResult:
         import mlx_whisper  # type: ignore[import-untyped]
 
-        repo_id = resolve_mlx_model_repo(model_name)
+        resolved_model = "large-v3-turbo" if model_name == "auto" else model_name
+        repo_id = resolve_mlx_model_repo(resolved_model)
         if on_progress:
             on_progress(5.0, f"Loading audio and MLX Whisper model ({repo_id})...")
 
@@ -118,7 +110,7 @@ class MLXWhisperBackend:
             kwargs["language"] = source_lang
 
         if on_progress:
-            on_progress(15.0, f"Transcribing with MLX Whisper ({model_name})...")
+            on_progress(15.0, f"Transcribing on Apple Silicon GPU with MLX Whisper ({resolved_model})...")
 
         result = mlx_whisper.transcribe(audio, **kwargs)
         detected_lang = str(result.get("language") or (source_lang if source_lang != "auto" else "en"))
@@ -159,9 +151,40 @@ class MLXWhisperBackend:
 
 
 class FasterWhisperBackend:
-    """Local Whisper transcription via faster-whisper (CTranslate2) with VAD."""
+    """Local Whisper transcription via faster-whisper (CTranslate2) for NVIDIA CUDA dGPU & CPU."""
 
     name = "faster-whisper"
+
+    def __init__(self, device: str = "auto", compute_type: str = "default") -> None:
+        self.device = device
+        self.compute_type = compute_type
+
+    def _load_model(self, model_id: str, on_progress: ProgressCallback | None = None):
+        from faster_whisper import WhisperModel  # type: ignore[import-untyped]
+
+        device = self.device
+        compute_type = self.compute_type
+        if device == "auto":
+            hw = detect_hardware()
+            if hw.primary_accelerator == "nvidia_cuda":
+                device = "cuda"
+                compute_type = hw.recommended_compute_type
+            else:
+                device = "cpu"
+                compute_type = "int8"
+
+        try:
+            return WhisperModel(model_id, device=device, compute_type=compute_type), device, compute_type
+        except Exception as exc:
+            # On Windows, NVIDIA GPU may exist without cuBLAS/cuDNN DLLs installed; degrade cleanly to CPU int8.
+            if device == "cuda":
+                if on_progress:
+                    on_progress(
+                        8.0,
+                        f"CUDA runtime unavailable ({exc}); falling back to CPU (int8)...",
+                    )
+                return WhisperModel(model_id, device="cpu", compute_type="int8"), "cpu", "int8"
+            raise
 
     def transcribe(
         self,
@@ -170,12 +193,11 @@ class FasterWhisperBackend:
         model_name: str = "large-v3-turbo",
         on_progress: ProgressCallback | None = None,
     ) -> TranscriptionResult:
-        from faster_whisper import WhisperModel  # type: ignore[import-untyped]
-
+        resolved_model = resolve_faster_whisper_model("large-v3-turbo" if model_name == "auto" else model_name)
         if on_progress:
-            on_progress(5.0, f"Loading faster-whisper model ({model_name})...")
+            on_progress(5.0, f"Loading faster-whisper model ({resolved_model}, {self.device}/{self.compute_type})...")
 
-        model = WhisperModel(model_name, device="auto", compute_type="default")
+        model, active_device, active_compute = self._load_model(resolved_model, on_progress=on_progress)
         audio = load_wav_as_float32(wav_path)
         duration = float(len(audio)) / 16000.0 if len(audio) > 0 else 0.0
 
@@ -188,7 +210,10 @@ class FasterWhisperBackend:
             kwargs["language"] = source_lang
 
         if on_progress:
-            on_progress(15.0, f"Transcribing with faster-whisper ({model_name})...")
+            on_progress(
+                15.0,
+                f"Transcribing with faster-whisper ({resolved_model} on {active_device.upper()} / {active_compute})...",
+            )
 
         seg_iter, info = model.transcribe(audio, **kwargs)
         detected_lang = str(getattr(info, "language", None) or (source_lang if source_lang != "auto" else "en"))
@@ -229,6 +254,144 @@ class FasterWhisperBackend:
             segments=segments,
             duration=total_duration,
         )
+
+
+class OpenVINOWhisperBackend:
+    """Local Whisper transcription accelerated on Intel iGPU / Arc (and CPU) via OpenVINO GenAI."""
+
+    name = "openvino"
+
+    def __init__(self, device: str = "GPU", compute_type: str = "int8") -> None:
+        self.device = device
+        self.compute_type = compute_type
+
+    def _resolve_local_model_dir(self, repo_or_path: str) -> str:
+        candidate = Path(repo_or_path)
+        if candidate.exists() and candidate.is_dir():
+            return str(candidate)
+        from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
+
+        return str(snapshot_download(repo_id=repo_or_path))
+
+    def _create_pipeline(self, model_dir: str, on_progress: ProgressCallback | None = None):
+        import openvino_genai as ov_genai  # type: ignore[import-untyped]
+
+        devices_to_try = [self.device]
+        if self.device.upper() != "CPU":
+            devices_to_try.append("CPU")
+
+        last_exc: Exception | None = None
+        for dev in devices_to_try:
+            try:
+                try:
+                    return ov_genai.WhisperPipeline(model_dir, dev, word_timestamps=True), dev
+                except TypeError:
+                    return ov_genai.WhisperPipeline(model_dir, dev), dev
+            except Exception as exc:
+                last_exc = exc
+                if dev != "CPU" and on_progress:
+                    on_progress(10.0, f"OpenVINO {dev} init failed ({exc}); falling back to CPU...")
+
+        raise RuntimeError(f"Failed to initialize OpenVINO WhisperPipeline: {last_exc}")
+
+    def transcribe(
+        self,
+        wav_path: Path,
+        source_lang: SourceLanguage = "auto",
+        model_name: str = "large-v3-turbo",
+        on_progress: ProgressCallback | None = None,
+    ) -> TranscriptionResult:
+        resolved_alias = "large-v3-turbo" if model_name == "auto" else model_name
+        repo_id = resolve_openvino_model_repo(resolved_alias, compute_type=self.compute_type)
+        if on_progress:
+            on_progress(5.0, f"Preparing OpenVINO Whisper model ({repo_id})...")
+
+        model_dir = self._resolve_local_model_dir(repo_id)
+        pipe, active_device = self._create_pipeline(model_dir, on_progress=on_progress)
+
+        audio = load_wav_as_float32(wav_path)
+        duration = float(len(audio)) / 16000.0 if len(audio) > 0 else 0.0
+        raw_speech = audio.tolist()
+
+        gen_kwargs: dict = {
+            "task": "transcribe",
+            "return_timestamps": True,
+        }
+        if source_lang != "auto":
+            gen_kwargs["language"] = f"<|{source_lang}|>"
+
+        if on_progress:
+            on_progress(18.0, f"Transcribing with OpenVINO Whisper ({resolved_alias} on Intel {active_device})...")
+
+        result = pipe.generate(raw_speech, **gen_kwargs)
+        raw_chunks = getattr(result, "chunks", None) or []
+
+        segments: list[SubtitleSegment] = []
+        for idx, chunk in enumerate(raw_chunks, start=1):
+            text = str(getattr(chunk, "text", "") or "").strip()
+            if not text:
+                continue
+            start_ts = float(getattr(chunk, "start_ts", 0.0))
+            end_ts = float(getattr(chunk, "end_ts", start_ts + 0.1))
+            words: list[WordTimestamp] = []
+            for w in (getattr(chunk, "words", None) or []):
+                w_text = str(getattr(w, "word", "") or getattr(w, "text", ""))
+                if not w_text.strip():
+                    continue
+                words.append(
+                    WordTimestamp(
+                        word=w_text,
+                        start=float(getattr(w, "start_ts", getattr(w, "start", start_ts))),
+                        end=float(getattr(w, "end_ts", getattr(w, "end", end_ts))),
+                    )
+                )
+            segments.append(
+                SubtitleSegment(
+                    index=idx,
+                    start=start_ts,
+                    end=max(end_ts, start_ts + 0.1),
+                    source_text=text,
+                    words=words,
+                )
+            )
+
+        # Fallback if chunks were not populated by a specific OpenVINO build.
+        if not segments:
+            texts = getattr(result, "texts", None) or []
+            full_text = str(texts[0] if texts else result).strip()
+            if full_text:
+                segments.append(
+                    SubtitleSegment(
+                        index=1,
+                        start=0.0,
+                        end=max(duration, 1.0),
+                        source_text=full_text,
+                    )
+                )
+
+        if source_lang != "auto":
+            detected_lang = source_lang
+        else:
+            raw_lang = getattr(result, "language", None)
+            if raw_lang:
+                detected_lang = str(raw_lang).strip("<>| ").lower()
+            else:
+                detected_lang = _detect_language_from_text("".join(s.source_text for s in segments[:25]))
+
+        if on_progress:
+            on_progress(100.0, f"Transcription complete ({len(segments)} raw segments, lang={detected_lang})")
+
+        return TranscriptionResult(
+            language=detected_lang,
+            segments=segments,
+            duration=duration,
+        )
+
+
+def _detect_language_from_text(sample: str) -> str:
+    """Heuristic to distinguish Japanese vs English when an ASR backend omits language metadata."""
+    kana_count = sum(1 for ch in sample if "\u3040" <= ch <= "\u30ff")
+    return "ja" if kana_count >= 3 else "en"
 
 
 def _join_words(words: list[WordTimestamp], is_cjk: bool) -> str:

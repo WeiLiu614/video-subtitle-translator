@@ -48,6 +48,8 @@ def probe_duration(media_path: str | Path) -> float | None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     match = _DURATION_RE.search(proc.stderr)
@@ -94,7 +96,15 @@ def extract_audio_wav(
         str(sample_rate),
         str(dst),
     ]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
     if proc.returncode != 0 or not dst.exists() or dst.stat().st_size == 0:
         if dst.exists() and output_wav is None:
             dst.unlink(missing_ok=True)

@@ -21,7 +21,11 @@ def test_status_and_index(tmp_path: Path):
 
     status = client.get("/api/status").json()
     assert "whisper_models" in status
+    assert "auto" in status["whisper_models"]
     assert "asr_backends" in status
+    assert "openvino" in status["asr_backends"]
+    assert "hardware" in status
+    assert "recommended_backend" in status["hardware"]
 
 
 def test_job_lifecycle_edit_and_download(tmp_path: Path):

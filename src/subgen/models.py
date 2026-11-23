@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 SourceLanguage = Literal["auto", "ja", "en"]
-ASRBackendName = Literal["auto", "mlx", "faster-whisper"]
+ASRBackendName = Literal["auto", "mlx", "faster-whisper", "openvino"]
 TranslatorName = Literal["gemini", "openai"]
 PipelineStage = Literal[
     "preparing",
@@ -52,7 +52,7 @@ class PipelineConfig(BaseModel):
 
     source_lang: SourceLanguage = "auto"
     asr_backend: ASRBackendName = "auto"
-    whisper_model: str = "large-v3-turbo"
+    whisper_model: str = "auto"
     translator: TranslatorName = "openai"
     translation_model: str | None = None
     api_key: str | None = None

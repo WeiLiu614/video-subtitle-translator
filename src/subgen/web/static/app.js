@@ -67,16 +67,45 @@ async function loadStatus() {
     const res = await fetch("/api/status");
     const data = await res.json();
     const badges = [];
-    if (data.apple_silicon) {
+    const hw = data.hardware;
+    if (hw) {
+      if (hw.primary_accelerator === "apple_silicon") {
+        badges.push(`<span class="badge ok">macOS · Apple Silicon</span>`);
+      } else if (hw.primary_accelerator === "nvidia_cuda") {
+        const gpuLabel = hw.primary_gpu_name || "NVIDIA CUDA";
+        badges.push(`<span class="badge ok">${hw.os_name} · ${gpuLabel}</span>`);
+      } else if (hw.primary_accelerator === "intel_igpu") {
+        const gpuLabel = hw.primary_gpu_name || "Intel GPU";
+        badges.push(`<span class="badge ok">${hw.os_name} · ${gpuLabel}</span>`);
+      } else {
+        badges.push(`<span class="badge">${hw.os_name} · CPU</span>`);
+      }
+
+      const autoOpt = els.whisperModel.querySelector('option[value="auto"]');
+      if (autoOpt && hw.recommended_whisper_model) {
+        autoOpt.textContent = `自动选择（推荐 ${hw.recommended_whisper_model} · ${hw.recommended_backend}）`;
+      }
+      const autoAsrOpt = els.asrBackend.querySelector('option[value="auto"]');
+      if (autoAsrOpt && hw.recommended_backend) {
+        autoAsrOpt.textContent = `自动选择（推荐 ${hw.recommended_backend} / ${hw.recommended_device}）`;
+      }
+    } else if (data.apple_silicon) {
       badges.push(`<span class="badge ok">Apple Silicon</span>`);
     }
-    if (data.asr_backends.mlx) {
-      badges.push(`<span class="badge ok">MLX Whisper ✓</span>`);
-    } else if (data.asr_backends.faster_whisper) {
-      badges.push(`<span class="badge ok">faster-whisper ✓</span>`);
+
+    const installedAsr = [];
+    if (data.asr_backends.mlx) installedAsr.push("MLX Whisper ✓");
+    if (data.asr_backends.faster_whisper) installedAsr.push("faster-whisper ✓");
+    if (data.asr_backends.openvino) installedAsr.push("OpenVINO GPU ✓");
+
+    if (installedAsr.length > 0) {
+      for (const label of installedAsr) {
+        badges.push(`<span class="badge ok">${label}</span>`);
+      }
     } else {
       badges.push(`<span class="badge warn">未安装本地 Whisper</span>`);
     }
+
     badges.push(
       data.ffmpeg_available
         ? `<span class="badge ok">FFmpeg ✓</span>`
@@ -98,7 +127,7 @@ async function loadStatus() {
       if (data.defaults.whisper_model) {
         els.whisperModel.value = data.defaults.whisper_model;
       }
-      els.translator.value = data.defaults.translator || "gemini";
+      els.translator.value = data.defaults.translator || "openai";
       if (data.defaults.openai_base_url) {
         els.apiBaseUrl.value = data.defaults.openai_base_url;
       }

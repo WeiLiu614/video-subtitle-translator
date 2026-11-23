@@ -63,9 +63,11 @@
           <label class="field">
             <span>本地 Whisper 模型</span>
             <select id="whisper-model">
-              <option value="large-v3-turbo" selected>large-v3-turbo (推荐 · 速度与精度平衡)</option>
+              <option value="auto" selected>自动选择（按当前硬件自动推荐）</option>
+              <option value="large-v3-turbo">large-v3-turbo (推荐 · 速度与精度平衡)</option>
               <option value="large-v3">large-v3 (最高精度 · 适合复杂日语)</option>
-              <option value="medium">medium (轻量快速)</option>
+              <option value="large-v3-turbo-int4">large-v3-turbo-int4 (Intel iGPU 轻量 INT4)</option>
+              <option value="medium">medium (轻量快速 · 适合低显存 / CPU)</option>
               <option value="small">small (极速测试)</option>
               <option value="base">base (最轻量)</option>
             </select>
@@ -74,9 +76,10 @@
           <label class="field">
             <span>本地 ASR 引擎</span>
             <select id="asr-backend">
-              <option value="auto" selected>自动选择 (Apple Silicon 优先 MLX)</option>
-              <option value="mlx">mlx-whisper (Apple Silicon GPU)</option>
-              <option value="faster-whisper">faster-whisper (CTranslate2 + VAD)</option>
+              <option value="auto" selected>自动选择（按 OS / GPU 自动匹配）</option>
+              <option value="mlx">mlx-whisper (macOS Apple Silicon)</option>
+              <option value="faster-whisper">faster-whisper (Windows/Linux NVIDIA CUDA / CPU)</option>
+              <option value="openvino">openvino-genai (Windows/Linux Intel iGPU / Arc)</option>
             </select>
           </label>
 

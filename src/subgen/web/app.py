@@ -23,14 +23,14 @@ from subgen.audio import FFmpegNotFoundError, find_ffmpeg
 from subgen.config import (
     DEFAULT_GEMINI_MODEL,
     DEFAULT_OPENAI_MODEL,
-    MLX_WHISPER_MODELS,
     SUPPORTED_SUBTITLE_EXTENSIONS,
+    WHISPER_MODEL_CHOICES,
     load_settings,
 )
+from subgen.hardware import detect_hardware, has_module
 from subgen.models import PipelineConfig, ProgressEvent, SubtitleSegment
 from subgen.pipeline import run_pipeline
 from subgen.srt import render_srt, render_vtt, write_srt
-from subgen.transcribe import has_module, is_apple_silicon
 
 STATIC_DIR = Path(__file__).parent / "static"
 UPLOAD_ROOT = Path.cwd() / ".subgen_uploads"
@@ -115,6 +115,7 @@ def create_app(upload_root: Path | None = None) -> FastAPI:
     @app.get("/api/status")
     def api_status() -> dict[str, Any]:
         settings = load_settings()
+        hw = detect_hardware()
         try:
             ffmpeg_path = find_ffmpeg()
         except FFmpegNotFoundError:
@@ -122,13 +123,15 @@ def create_app(upload_root: Path | None = None) -> FastAPI:
 
         return {
             "version": __version__,
-            "apple_silicon": is_apple_silicon(),
+            "apple_silicon": hw.is_apple_silicon,
+            "hardware": hw.model_dump(),
             "ffmpeg_available": ffmpeg_path is not None,
             "asr_backends": {
                 "mlx": has_module("mlx_whisper"),
                 "faster_whisper": has_module("faster_whisper"),
+                "openvino": has_module("openvino_genai"),
             },
-            "whisper_models": list(MLX_WHISPER_MODELS.keys()),
+            "whisper_models": WHISPER_MODEL_CHOICES,
             "defaults": {
                 "asr_backend": settings.default_asr_backend,
                 "whisper_model": settings.default_whisper_model,
@@ -149,7 +152,7 @@ def create_app(upload_root: Path | None = None) -> FastAPI:
         local_path: str = Form(default=""),
         source_lang: str = Form(default="auto"),
         asr_backend: str = Form(default="auto"),
-        whisper_model: str = Form(default="large-v3-turbo"),
+        whisper_model: str = Form(default="auto"),
         translator: str = Form(default="openai"),
         translation_model: str = Form(default=""),
         api_key: str = Form(default=""),
@@ -184,7 +187,7 @@ def create_app(upload_root: Path | None = None) -> FastAPI:
         cfg = PipelineConfig(
             source_lang=source_lang,  # type: ignore[arg-type]
             asr_backend=asr_backend,  # type: ignore[arg-type]
-            whisper_model=whisper_model.strip() or "large-v3-turbo",
+            whisper_model=whisper_model.strip() or "auto",
             translator=translator,  # type: ignore[arg-type]
             translation_model=translation_model.strip() or None,
             api_key=api_key.strip() or None,

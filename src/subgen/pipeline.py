@@ -83,8 +83,19 @@ def run_pipeline(
         emit("extracting", 8.0, f"Extracting 16kHz audio track from {src.name}...")
         wav_path = extract_audio_wav(src)
         try:
-            backend = asr_backend or create_asr_backend(cfg.asr_backend)
-            emit("transcribing", 15.0, f"Starting local Whisper ({backend.name}, model={cfg.whisper_model})...")
+            if asr_backend is not None:
+                backend = asr_backend
+                resolved_model = "large-v3-turbo" if cfg.whisper_model == "auto" else cfg.whisper_model
+                plan_desc = f"{backend.name}, model={resolved_model}"
+            else:
+                backend, plan = create_asr_backend(
+                    cfg.asr_backend,
+                    requested_model=cfg.whisper_model,
+                )
+                resolved_model = plan.model_name
+                plan_desc = f"{plan.backend} on {plan.device} ({plan.compute_type}), model={resolved_model}"
+
+            emit("transcribing", 15.0, f"Starting local Whisper ({plan_desc})...")
 
             def on_asr_progress(pct: float, msg: str) -> None:
                 # Map ASR 0..100% into overall 15..55%
@@ -93,7 +104,7 @@ def run_pipeline(
             asr_result = backend.transcribe(
                 wav_path,
                 source_lang=cfg.source_lang,
-                model_name=cfg.whisper_model,
+                model_name=resolved_model,
                 on_progress=on_asr_progress,
             )
             detected_lang = asr_result.language

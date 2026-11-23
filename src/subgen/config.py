@@ -16,7 +16,41 @@ MLX_WHISPER_MODELS: dict[str, str] = {
     "medium": "mlx-community/whisper-medium-mlx",
     "large-v3": "mlx-community/whisper-large-v3-mlx",
     "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+    "large-v3-turbo-int4": "mlx-community/whisper-large-v3-turbo",
 }
+
+# Official OpenVINO IR Hugging Face repos for Intel iGPU / Arc / CPU on Windows & Linux.
+OPENVINO_WHISPER_MODELS: dict[str, str] = {
+    "tiny": "OpenVINO/whisper-tiny-fp16-ov",
+    "base": "OpenVINO/whisper-base-int8-ov",
+    "small": "OpenVINO/whisper-small-int8-ov",
+    "medium": "OpenVINO/whisper-medium-int8-ov",
+    "large-v3": "OpenVINO/whisper-large-v3-int8-ov",
+    "large-v3-turbo": "OpenVINO/whisper-large-v3-turbo-int8-ov",
+    "large-v3-turbo-int4": "OpenVINO/whisper-large-v3-turbo-int4-ov",
+}
+
+# Canonical model aliases accepted by faster-whisper (CTranslate2).
+FASTER_WHISPER_MODELS: dict[str, str] = {
+    "tiny": "tiny",
+    "base": "base",
+    "small": "small",
+    "medium": "medium",
+    "large-v3": "large-v3",
+    "large-v3-turbo": "large-v3-turbo",
+    "large-v3-turbo-int4": "large-v3-turbo",
+}
+
+WHISPER_MODEL_CHOICES: list[str] = [
+    "auto",
+    "large-v3-turbo",
+    "large-v3",
+    "large-v3-turbo-int4",
+    "medium",
+    "small",
+    "base",
+    "tiny",
+]
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_OPENAI_MODEL = "gpt-6-luna"
@@ -57,7 +91,7 @@ class AppSettings:
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     default_asr_backend: str = "auto"
-    default_whisper_model: str = "large-v3-turbo"
+    default_whisper_model: str = "auto"
     default_translator: str = "openai"
     default_gemini_model: str = DEFAULT_GEMINI_MODEL
     default_openai_model: str = DEFAULT_OPENAI_MODEL
@@ -88,7 +122,7 @@ def load_settings(env_file: Path | None = None) -> AppSettings:
         openai_api_key=openai_key,
         openai_base_url=openai_base_url,
         default_asr_backend=os.getenv("SUBGEN_ASR_BACKEND", "auto"),
-        default_whisper_model=os.getenv("SUBGEN_WHISPER_MODEL", "large-v3-turbo"),
+        default_whisper_model=os.getenv("SUBGEN_WHISPER_MODEL", "auto"),
         default_translator=default_translator,
         default_gemini_model=os.getenv("SUBGEN_GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
         default_openai_model=os.getenv("SUBGEN_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
@@ -101,3 +135,21 @@ def resolve_mlx_model_repo(model_name: str) -> str:
     if "/" in cleaned:
         return cleaned
     return MLX_WHISPER_MODELS.get(cleaned, cleaned)
+
+
+def resolve_openvino_model_repo(model_name: str, compute_type: str = "int8") -> str:
+    """Resolve a short Whisper model alias into an OpenVINO Hugging Face repo ID."""
+    cleaned = model_name.strip()
+    if "/" in cleaned:
+        return cleaned
+    if cleaned == "large-v3-turbo" and compute_type == "int4":
+        return OPENVINO_WHISPER_MODELS["large-v3-turbo-int4"]
+    return OPENVINO_WHISPER_MODELS.get(cleaned, cleaned)
+
+
+def resolve_faster_whisper_model(model_name: str) -> str:
+    """Resolve a short Whisper model alias into a CTranslate2 / faster-whisper model name."""
+    cleaned = model_name.strip()
+    if "/" in cleaned:
+        return cleaned
+    return FASTER_WHISPER_MODELS.get(cleaned, cleaned)

@@ -28,9 +28,22 @@ mlx = [
 faster-whisper = [
     "faster-whisper>=1.0.3",
 ]
-all = [
-    "mlx-whisper>=0.4.1",
+nvidia = [
     "faster-whisper>=1.0.3",
+]
+intel = [
+    "openvino-genai>=2025.0.0",
+    "huggingface-hub>=0.24.0",
+]
+openvino = [
+    "openvino-genai>=2025.0.0",
+    "huggingface-hub>=0.24.0",
+]
+all = [
+    "mlx-whisper>=0.4.1; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "faster-whisper>=1.0.3",
+    "openvino-genai>=2025.0.0; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "huggingface-hub>=0.24.0",
 ]
 dev = [
     "pytest>=8.0.0",

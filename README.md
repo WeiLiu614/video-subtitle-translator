@@ -1,12 +1,17 @@
 # SubGen · 中文字幕生成器
 
-> Generate accurate, natural **Simplified Chinese (`.srt`)** subtitles for **Japanese** and **English** videos — powered by local Whisper on Apple Silicon and context-aware LLM translation, with both a **CLI** and a **local Web UI**.
+> Generate accurate, natural **Simplified Chinese (`.srt`)** subtitles for **Japanese** and **English** videos — automatically detecting your OS and GPU (**macOS Apple Silicon**, **Windows/Linux NVIDIA dGPU**, or **Windows/Linux Intel iGPU**) to pick the optimal local Whisper backend and model, with both a **CLI** and a **local Web UI**.
 
 ---
 
 ## Features
 
-- **Local-First Speech Recognition (Free & Private)**: Transcribes Japanese (`ja`) and English (`en`) audio locally using **`mlx-whisper`** on Apple Silicon GPU (Metal) or **`faster-whisper`** (CTranslate2 + Silero VAD).
+- **Automatic Cross-Platform Hardware & Model Selection**: Detects OS, GPU vendor/VRAM, and system RAM automatically to choose the best local Whisper runtime, precision, and model:
+  - **macOS Apple Silicon (`arm64`)** → **`mlx-whisper`** (Metal GPU)
+  - **Windows / Linux + NVIDIA dGPU** → **`faster-whisper`** (CUDA `float16` / `int8_float16` based on VRAM + Silero VAD, with automatic CPU fallback)
+  - **Windows / Linux + Intel iGPU / Arc** → **`openvino-genai`** (OpenVINO `GPU` `int8` / `int4`, with automatic CPU fallback)
+  - **Hybrid Windows Laptops (Intel iGPU + NVIDIA dGPU)** → Automatically prioritizes the NVIDIA dGPU while letting you override with `--asr openvino`
+  - **CPU-only fallback** → **`faster-whisper`** (`int8`, `medium`)
 - **Smart Cue Segmentation**: Uses Whisper word-level timestamps to split overly long cues cleanly at natural punctuation and speech pauses, while filtering empty punctuation and repetitive hallucination loops.
 - **Context-Aware LLM Translation**: Translates cues in numbered JSON batches with a sliding read-only context window so pronouns, honorifics (日语敬语/主语省略), character names, and tone remain consistent across the entire video.
 - **Cost-Efficient Default**: Defaults to OpenAI's **`gpt-6-luna`** (the cheapest model in the GPT-6 generation, with `reasoning_effort="none"` to avoid hidden reasoning token overhead), and supports **`gpt-5-nano`**, **Google Gemini**, **DeepSeek**, **OpenRouter**, and local **Ollama**.
@@ -23,18 +28,23 @@
 ```mermaid
 flowchart LR
     A["Video / Audio / .srt"] --> B["FFmpeg<br/>16kHz Mono WAV"]
-    B --> C["Local Whisper ASR<br/>mlx-whisper / faster-whisper"]
-    C --> D["Segment Cleanup<br/>Word-level Split & Dedup"]
-    D --> E["Context-Aware LLM<br/>Sliding-Window JSON Batches"]
-    E --> F["Simplified Chinese .srt<br/>(+ Optional Bilingual / Web Preview)"]
+    B --> C["Auto Hardware Detect<br/>Apple Silicon / NVIDIA CUDA / Intel iGPU"]
+    C --> D["Local Whisper ASR<br/>mlx / faster-whisper / OpenVINO"]
+    D --> E["Segment Cleanup<br/>Word-level Split & Dedup"]
+    E --> F["Context-Aware LLM<br/>Sliding-Window JSON Batches"]
+    F --> G["Simplified Chinese .srt<br/>(+ Optional Bilingual / Web Preview)"]
 ```
 
 ---
 
 ## Requirements
 
-- **Python**: 3.11 or 3.12 (recommended for `mlx-whisper` / `faster-whisper` wheels)
-- **Hardware**: Apple Silicon Mac (`arm64`) recommended for `mlx-whisper`; any macOS/Linux/Windows CPU or GPU works with `faster-whisper`
+- **Python**: 3.11 or 3.12 (recommended for `mlx-whisper`, `faster-whisper`, and `openvino-genai` wheels)
+- **Supported Platforms & Hardware**:
+  - **macOS Apple Silicon (M1–M4)**: Metal GPU via `mlx-whisper`
+  - **Windows 10/11 & Linux with NVIDIA dGPU**: CUDA via `faster-whisper` (CTranslate2)
+  - **Windows 10/11 & Linux with Intel iGPU / Arc** (Iris Xe, UHD, Arc): Intel GPU via `openvino-genai`
+  - **Any CPU-only machine**: `faster-whisper` (`int8`)
 - **API Key**: An API key for OpenAI (or any OpenAI-compatible provider / Google Gemini)
 
 ---
@@ -43,6 +53,7 @@ flowchart LR
 
 ### 1. Clone and create a virtual environment
 
+**macOS / Linux:**
 ```bash
 git clone https://github.com/WeiLiu614/video-subtitle-translator.git
 cd video-subtitle-translator
@@ -50,18 +61,32 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 2. Install SubGen
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/WeiLiu614/video-subtitle-translator.git
+cd video-subtitle-translator
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
 
-- **Apple Silicon Mac (recommended — MLX GPU acceleration):**
+### 2. Install SubGen for your hardware
+
+- **macOS Apple Silicon (MLX Metal GPU):**
   ```bash
   pip install -e ".[mlx,dev]"
   ```
-- **Cross-platform / CPU / NVIDIA (`faster-whisper`):**
-  ```bash
-  pip install -e ".[faster-whisper,dev]"
+- **Windows / Linux with NVIDIA dGPU (CUDA):**
+  ```powershell
+  pip install -e ".[nvidia,dev]"
+  # Optional if CUDA 12 runtime DLLs (cublas64_12.dll / cudnn) are not already installed system-wide:
+  pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
   ```
-- **Both local Whisper backends:**
-  ```bash
+- **Windows / Linux with Intel iGPU / Arc (OpenVINO GPU):**
+  ```powershell
+  pip install -e ".[intel,dev]"
+  ```
+- **Windows Hybrid Laptop (Intel iGPU + NVIDIA dGPU) or All Platform Backends:**
+  ```powershell
   pip install -e ".[all,dev]"
   ```
 
@@ -131,8 +156,8 @@ subgen generate video.mp4 --translator openai --base-url https://api.deepseek.co
 | :--- | :--- | :--- |
 | `-o, --output PATH` | `<stem>.zh.srt` | Output `.srt` file path |
 | `-l, --lang` | `auto` | Source language: `auto`, `ja`, or `en` |
-| `--asr` | `auto` | Local Whisper backend: `auto`, `mlx`, or `faster-whisper` |
-| `--whisper-model` | `large-v3-turbo` | Whisper model alias or MLX Hugging Face repo ID |
+| `--asr` | `auto` | Local Whisper backend: `auto`, `mlx`, `faster-whisper`, or `openvino` |
+| `--whisper-model` | `auto` | `auto` (hardware-selected), model alias (`large-v3-turbo`, `large-v3`, `large-v3-turbo-int4`, `medium`, etc.), or Hugging Face repo |
 | `-t, --translator` | `openai` | Translation provider: `openai` or `gemini` |
 | `-m, --model` | `gpt-6-luna` / `gemini-2.5-flash` | LLM model override |
 | `--api-key` | from `.env` | API key override |
@@ -160,18 +185,22 @@ What you can do in the Web UI:
 
 ---
 
-## Model Recommendations
+## Automatic Hardware & Model Selection
 
-### Local Whisper Models (Apple Silicon MLX)
+When `--asr auto` and `--whisper-model auto` (the defaults) are used, SubGen inspects your OS, GPUs, VRAM, and RAM and automatically chooses:
 
-| Model | Speed | JA / EN Accuracy | Best For |
+| OS & Hardware | Auto Backend | Device & Precision | Auto Whisper Model |
 | :--- | :--- | :--- | :--- |
-| `large-v3-turbo` *(default)* | Very Fast | High | Everyday Japanese & English videos |
-| `large-v3` | Moderate | Highest | Noisy audio, fast Japanese dialogue, accents |
-| `medium` | Fast | Good | Lower RAM usage |
-| `small` / `base` | Ultra Fast | Basic | Quick tests and clean English speech |
+| **macOS Apple Silicon (16 GB+ RAM)** | `mlx` | Metal GPU | `large-v3-turbo` (`mlx-community/whisper-large-v3-turbo`) |
+| **macOS Apple Silicon (8 GB RAM)** | `mlx` | Metal GPU | `medium` (`mlx-community/whisper-medium-mlx`) |
+| **Windows / Linux + NVIDIA dGPU (≥ 6 GB VRAM)** | `faster-whisper` | `cuda` (`float16`) | `large-v3-turbo` |
+| **Windows / Linux + NVIDIA dGPU (4–6 GB VRAM)** | `faster-whisper` | `cuda` (`int8_float16`) | `large-v3-turbo` |
+| **Windows / Linux + NVIDIA dGPU (< 4 GB VRAM)** | `faster-whisper` | `cuda` (`int8_float16`) | `medium` |
+| **Windows / Linux + Intel iGPU / Arc (> 10 GB RAM)** | `openvino` | Intel `GPU` (`int8`) | `large-v3-turbo` (`OpenVINO/whisper-large-v3-turbo-int8-ov`) |
+| **Windows / Linux + Intel iGPU (≤ 10 GB RAM)** | `openvino` | Intel `GPU` (`int4`) | `large-v3-turbo-int4` (`OpenVINO/whisper-large-v3-turbo-int4-ov`) |
+| **CPU-only (Windows / Linux / Intel Mac)** | `faster-whisper` | `cpu` (`int8`) | `medium` |
 
-*(Models download automatically from Hugging Face on first run and are cached locally.)*
+*(Models download automatically from Hugging Face on first run and are cached locally. You can override the model at any time with `--whisper-model large-v3`, `medium`, `small`, etc.)*
 
 ### Cloud LLM Translation Models
 
@@ -194,8 +223,8 @@ What you can do in the Web UI:
 | `SUBGEN_TRANSLATOR` | `openai` | Default translation backend (`openai` or `gemini`) |
 | `SUBGEN_OPENAI_MODEL` | `gpt-6-luna` | Default OpenAI model |
 | `SUBGEN_GEMINI_MODEL` | `gemini-2.5-flash` | Default Gemini model |
-| `SUBGEN_ASR_BACKEND` | `auto` | Default local Whisper backend (`auto`, `mlx`, `faster-whisper`) |
-| `SUBGEN_WHISPER_MODEL` | `large-v3-turbo` | Default Whisper model |
+| `SUBGEN_ASR_BACKEND` | `auto` | Default local Whisper backend (`auto`, `mlx`, `faster-whisper`, `openvino`) |
+| `SUBGEN_WHISPER_MODEL` | `auto` | Default Whisper model (`auto` = hardware-selected, or explicit model name) |
 
 ---
 
@@ -205,16 +234,17 @@ What you can do in the Web UI:
 src/subgen/
 ├── audio.py         # FFmpeg discovery, duration probing, 16kHz mono WAV extraction
 ├── cli.py           # Click + Rich CLI (`generate`, `web`, `doctor`)
-├── config.py        # Environment loading & MLX Whisper model presets
+├── config.py        # Environment loading & MLX / OpenVINO / faster-whisper presets
+├── hardware.py      # Cross-platform OS & GPU detection (Apple Silicon / NVIDIA / Intel)
 ├── models.py        # Pydantic data models for segments, config, and progress events
 ├── pipeline.py      # Shared end-to-end orchestration pipeline
 ├── srt.py           # SRT & WebVTT rendering, parsing, and file I/O
-├── transcribe.py    # Local mlx-whisper & faster-whisper backends + cue post-processing
+├── transcribe.py    # Local mlx-whisper, faster-whisper (CUDA/CPU), & OpenVINO GPU backends
 ├── translate.py     # Context-aware JSON batch translator (OpenAI / Gemini) with retries
 └── web/
     ├── app.py       # FastAPI server, SSE progress stream, media & VTT/SRT endpoints
     └── static/      # Zero-build HTML/CSS/JS studio frontend
-tests/               # Pytest suite covering SRT, ASR cleanup, LLM batching, pipeline & Web UI
+tests/               # Pytest suite covering hardware detect, SRT, ASR, LLM, pipeline & Web UI
 ```
 
 ---

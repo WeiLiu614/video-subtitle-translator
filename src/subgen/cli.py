@@ -23,10 +23,10 @@ from rich.table import Table
 from subgen import __version__
 from subgen.audio import FFmpegNotFoundError, find_ffmpeg
 from subgen.config import load_settings
+from subgen.hardware import detect_hardware, has_module
 from subgen.models import PipelineConfig, ProgressEvent
 from subgen.pipeline import run_pipeline
 from subgen.srt import format_srt_timestamp
-from subgen.transcribe import has_module, is_apple_silicon
 
 console = Console()
 
@@ -41,8 +41,8 @@ def main() -> None:
 @click.argument("input_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("-o", "--output", "output_path", type=click.Path(path_type=Path), default=None, help="Output .srt file path (default: <name>.zh.srt).")
 @click.option("-l", "--lang", "source_lang", type=click.Choice(["auto", "ja", "en"]), default="auto", show_default=True, help="Source audio language.")
-@click.option("--asr", "asr_backend", type=click.Choice(["auto", "mlx", "faster-whisper"]), default=None, help="Local Whisper backend (default: auto / mlx on Apple Silicon).")
-@click.option("--whisper-model", default=None, help="Whisper model name or Hugging Face MLX repo (default: large-v3-turbo).")
+@click.option("--asr", "asr_backend", type=click.Choice(["auto", "mlx", "faster-whisper", "openvino"]), default=None, help="Local Whisper backend (default: auto-detected from OS & GPU).")
+@click.option("--whisper-model", default=None, help="Whisper model alias, Hugging Face repo, or 'auto' (hardware-selected default).")
 @click.option("-t", "--translator", type=click.Choice(["gemini", "openai"]), default=None, help="Cloud LLM provider for translation.")
 @click.option("-m", "--model", "translation_model", default=None, help="Translation LLM model name override.")
 @click.option("--api-key", default=None, help="LLM API key override (otherwise read from .env / environment).")
@@ -165,18 +165,34 @@ def web_cmd(host: str, port: int, no_open: bool) -> None:
 
 @main.command("doctor")
 def doctor_cmd() -> None:
-    """Check local environment, Whisper backends, FFmpeg, and LLM API configuration."""
+    """Check OS, GPU/hardware detection, Whisper backends, FFmpeg, and LLM API configuration."""
     settings = load_settings()
+    hw = detect_hardware()
 
     table = Table(title="SubGen Environment Diagnostics")
     table.add_column("Component", style="cyan", width=24)
-    table.add_column("Status", width=12)
+    table.add_column("Status", width=14)
     table.add_column("Details")
 
+    ram_info = f", {hw.system_ram_mb // 1024} GB RAM" if hw.system_ram_mb else ""
     table.add_row(
         "Platform",
         "[green]OK[/green]",
-        f"{platform.system()} {platform.machine()} (Apple Silicon: {'Yes' if is_apple_silicon() else 'No'})",
+        f"{hw.os_name} {hw.arch} ({hw.primary_accelerator}{ram_info})",
+    )
+
+    if hw.gpus:
+        gpu_desc = "; ".join(
+            f"{g.name}" + (f" ({g.vram_mb} MB)" if g.vram_mb else "")
+            for g in hw.gpus
+        )
+    else:
+        gpu_desc = "No supported GPU detected (CPU mode)"
+    table.add_row("Detected GPU(s)", "[green]OK[/green]" if hw.gpus else "[dim]CPU[/dim]", gpu_desc)
+    table.add_row(
+        "Auto Whisper Plan",
+        "[cyan]AUTO[/cyan]",
+        f"{hw.recommended_backend} | device={hw.recommended_device} | precision={hw.recommended_compute_type} | model={hw.recommended_whisper_model}",
     )
     table.add_row("Python", "[green]OK[/green]", sys.version.split()[0])
 
@@ -189,27 +205,34 @@ def doctor_cmd() -> None:
     mlx_ok = has_module("mlx_whisper")
     table.add_row(
         "mlx-whisper",
-        "[green]INSTALLED[/green]" if mlx_ok else "[yellow]NOT INSTALLED[/yellow]",
-        "Recommended fast GPU backend on Apple Silicon" if mlx_ok else r"Install with: pip install 'subgen\[mlx]'",
+        "[green]INSTALLED[/green]" if mlx_ok else ("[yellow]RECOMMENDED[/yellow]" if hw.recommended_backend == "mlx" else "[dim]OPTIONAL[/dim]"),
+        "Apple Silicon Metal GPU backend" if mlx_ok else r"macOS Apple Silicon: pip install -e '.\[mlx]'",
     )
 
     fw_ok = has_module("faster_whisper")
     table.add_row(
         "faster-whisper",
-        "[green]INSTALLED[/green]" if fw_ok else "[dim]OPTIONAL[/dim]",
-        "CTranslate2 backend with Silero VAD" if fw_ok else r"Install with: pip install 'subgen\[faster-whisper]'",
+        "[green]INSTALLED[/green]" if fw_ok else ("[yellow]RECOMMENDED[/yellow]" if hw.recommended_backend == "faster-whisper" else "[dim]OPTIONAL[/dim]"),
+        "NVIDIA CUDA dGPU & CPU backend (CTranslate2 + VAD)" if fw_ok else r"Windows/Linux NVIDIA or CPU: pip install -e '.\[nvidia]'",
+    )
+
+    ov_ok = has_module("openvino_genai")
+    table.add_row(
+        "openvino-genai",
+        "[green]INSTALLED[/green]" if ov_ok else ("[yellow]RECOMMENDED[/yellow]" if hw.recommended_backend == "openvino" else "[dim]OPTIONAL[/dim]"),
+        "Intel iGPU / Arc GPU backend (OpenVINO)" if ov_ok else r"Windows/Linux Intel iGPU: pip install -e '.\[intel]'",
     )
 
     table.add_row(
-        "GEMINI_API_KEY",
-        "[green]CONFIGURED[/green]" if settings.gemini_api_key else "[yellow]NOT SET[/yellow]",
-        f"Default model: {settings.default_gemini_model}",
-    )
-    table.add_row(
         "OPENAI_API_KEY",
-        "[green]CONFIGURED[/green]" if settings.openai_api_key else "[dim]NOT SET[/dim]",
+        "[green]CONFIGURED[/green]" if settings.openai_api_key else "[yellow]NOT SET[/yellow]",
         f"Default model: {settings.default_openai_model}"
         + (f" | Base URL: {settings.openai_base_url}" if settings.openai_base_url else ""),
+    )
+    table.add_row(
+        "GEMINI_API_KEY",
+        "[green]CONFIGURED[/green]" if settings.gemini_api_key else "[dim]NOT SET[/dim]",
+        f"Default model: {settings.default_gemini_model}",
     )
 
     console.print(table)
