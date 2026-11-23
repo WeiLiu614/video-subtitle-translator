@@ -87,7 +87,7 @@
             <span>翻译 LLM 服务</span>
             <select id="translator">
               <option value="openai" selected>OpenAI (默认 gpt-6-luna) / 兼容接口 (DeepSeek / Ollama)</option>
-              <option value="gemini">Google Gemini (gemini-2.5-flash)</option>
+              <option value="gemini">Google Gemini (默认 gemini-4-hydrogen)</option>
             </select>
           </label>
         </div>
@@ -97,7 +97,7 @@
           <div class="settings-grid" style="margin-top: 12px;">
             <label class="field">
               <span>LLM 模型名称（留空使用默认）</span>
-              <input id="translation-model" type="text" placeholder="gpt-6-luna / gpt-5-nano / gemini-2.5-flash" />
+              <input id="translation-model" type="text" placeholder="gpt-6-luna / gemini-4-hydrogen / deepseek-flash" />
             </label>
 
             <label class="field">

@@ -52,7 +52,7 @@ WHISPER_MODEL_CHOICES: list[str] = [
     "tiny",
 ]
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-4-hydrogen"
 DEFAULT_OPENAI_MODEL = "gpt-6-luna"
 
 SUPPORTED_VIDEO_EXTENSIONS = {

@@ -145,9 +145,10 @@ subgen generate interview.mp4 --bilingual
 subgen generate subtitles.ja.srt -o subtitles.zh.srt
 
 # Override provider / model at runtime
-subgen generate video.mp4 --translator openai --model gpt-5-nano
-subgen generate video.mp4 --translator gemini --model gemini-2.5-flash
-subgen generate video.mp4 --translator openai --base-url https://api.deepseek.com/v1 --model deepseek-chat
+subgen generate video.mp4 --translator openai --model gpt-6-luna
+subgen generate video.mp4 --translator gemini --model gemini-4-hydrogen
+subgen generate video.mp4 --translator gemini --model gemini-3.5-flash-lite
+subgen generate video.mp4 --translator openai --base-url https://api.deepseek.com/v1 --model deepseek-flash
 ```
 
 #### Key CLI Options (`subgen generate`)
@@ -159,7 +160,7 @@ subgen generate video.mp4 --translator openai --base-url https://api.deepseek.co
 | `--asr` | `auto` | Local Whisper backend: `auto`, `mlx`, `faster-whisper`, or `openvino` |
 | `--whisper-model` | `auto` | `auto` (hardware-selected), model alias (`large-v3-turbo`, `large-v3`, `large-v3-turbo-int4`, `medium`, etc.), or Hugging Face repo |
 | `-t, --translator` | `openai` | Translation provider: `openai` or `gemini` |
-| `-m, --model` | `gpt-6-luna` / `gemini-2.5-flash` | LLM model override |
+| `-m, --model` | `gpt-6-luna` / `gemini-4-hydrogen` | LLM model override |
 | `--api-key` | from `.env` | API key override |
 | `--base-url` | from `.env` | Custom OpenAI-compatible API base URL |
 | `--batch-size` | `30` | Number of subtitle cues translated per LLM request (`1–100`) |
@@ -204,12 +205,15 @@ When `--asr auto` and `--whisper-model auto` (the defaults) are used, SubGen ins
 
 ### Cloud LLM Translation Models
 
-| Provider | Model | Relative Cost | Notes |
+| Provider | Model | Relative Cost (per 1M tokens) | Notes |
 | :--- | :--- | :--- | :--- |
-| **OpenAI** *(default)* | `gpt-6-luna` | Low (`$0.10` in / `$0.50` out per 1M) | Cheapest model in GPT-6 generation; runs with `reasoning_effort="none"` |
-| **OpenAI** | `gpt-5-nano` | Ultra-Low (`$0.05` in / `$0.40` out per 1M) | Prior-gen lowest-cost option |
-| **Google Gemini** | `gemini-2.5-flash` | Low | Strong multilingual subtitle quality |
-| **OpenAI-Compatible** | `deepseek-chat`, Ollama, etc. | Varies / Free (local) | Set `OPENAI_BASE_URL` and `--model` |
+| **OpenAI** *(default)* | `gpt-6-luna` | Low (`$0.10` in / `$0.50` out) | Cheapest model in newest GPT-6 family; runs with `reasoning_effort="none"` |
+| **OpenAI** | `gpt-6.2-sol` | Mid (`$2.00` in / `$10.00` out) | Higher-tier GPT-6.2 model for nuanced localization |
+| **OpenAI** | `gpt-5-nano` | Ultra-Low (`$0.05` in / `$0.40` out) | Prior-gen lowest-cost option |
+| **Google Gemini** *(default)* | `gemini-4-hydrogen` | Mid (`$1.50` in / `$7.50` out) | Newest fast Gemini 4 model; runs with `thinking_level="LOW"` |
+| **Google Gemini** | `gemini-3.5-flash-lite` / `gemini-3.8-flash` | Low (`$0.30` / `$0.75` in) | Budget / high-throughput Gemini 3 alternatives |
+| **DeepSeek (OpenAI-Compatible)** | `deepseek-flash` / `deepseek-v4-pro` | Low | Active DeepSeek-V4.1 models via `OPENAI_BASE_URL=https://api.deepseek.com/v1` |
+| **Local LLM** | Ollama, vLLM, etc. | Free (local) | Set `OPENAI_BASE_URL=http://localhost:11434/v1` and `--model` |
 
 ---
 
@@ -222,7 +226,7 @@ When `--asr auto` and `--whisper-model auto` (the defaults) are used, SubGen ins
 | `GEMINI_API_KEY` | — | Google Gemini API key |
 | `SUBGEN_TRANSLATOR` | `openai` | Default translation backend (`openai` or `gemini`) |
 | `SUBGEN_OPENAI_MODEL` | `gpt-6-luna` | Default OpenAI model |
-| `SUBGEN_GEMINI_MODEL` | `gemini-2.5-flash` | Default Gemini model |
+| `SUBGEN_GEMINI_MODEL` | `gemini-4-hydrogen` | Default Gemini model |
 | `SUBGEN_ASR_BACKEND` | `auto` | Default local Whisper backend (`auto`, `mlx`, `faster-whisper`, `openvino`) |
 | `SUBGEN_WHISPER_MODEL` | `auto` | Default Whisper model (`auto` = hardware-selected, or explicit model name) |
 

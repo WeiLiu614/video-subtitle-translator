@@ -46,15 +46,32 @@ class GeminiLLMClient:
         self.model = model
 
     def complete_json(self, system_prompt: str, user_prompt: str) -> str:
-        response = self._client.models.generate_content(
-            model=self.model,
-            contents=user_prompt,
-            config=self._types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json",
-                temperature=0.2,
-            ),
-        )
+        config_kwargs: dict[str, Any] = {
+            "system_instruction": system_prompt,
+            "response_mime_type": "application/json",
+            "temperature": 0.2,
+        }
+        # Keep thinking latency & output token cost low on Gemini 4 models for subtitle batches.
+        if self.model.lower().startswith("gemini-4") and hasattr(self._types, "ThinkingConfig"):
+            config_kwargs["thinking_config"] = self._types.ThinkingConfig(thinking_level="LOW")
+
+        try:
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=user_prompt,
+                config=self._types.GenerateContentConfig(**config_kwargs),
+            )
+        except Exception as exc:
+            if "thinking" in str(exc).lower() and "thinking_config" in config_kwargs:
+                config_kwargs.pop("thinking_config")
+                response = self._client.models.generate_content(
+                    model=self.model,
+                    contents=user_prompt,
+                    config=self._types.GenerateContentConfig(**config_kwargs),
+                )
+            else:
+                raise
+
         text = getattr(response, "text", None)
         if not text:
             raise TranslationError("Gemini returned an empty response.")

@@ -129,3 +129,24 @@ def test_openai_client_falls_back_when_temperature_unsupported():
     assert "temperature" in calls[0]
     assert "temperature" not in calls[1]
 
+
+def test_gemini_client_sets_low_thinking_for_gemini4():
+    from types import SimpleNamespace
+    from subgen.translate import GeminiLLMClient
+
+    captured: list[dict] = []
+
+    def fake_generate_content(**kwargs):
+        captured.append(dict(kwargs))
+        return SimpleNamespace(text='{"translations": [{"id": 1, "text": "你好"}]}')
+
+    client = GeminiLLMClient(api_key="test-key", model="gemini-4-hydrogen")
+    client._client = SimpleNamespace(models=SimpleNamespace(generate_content=fake_generate_content))
+
+    result = client.complete_json("sys", "user")
+    assert '"你好"' in result
+    assert captured[0]["model"] == "gemini-4-hydrogen"
+    assert captured[0]["config"].thinking_config is not None
+    assert str(captured[0]["config"].thinking_config.thinking_level).endswith("LOW")
+
+
