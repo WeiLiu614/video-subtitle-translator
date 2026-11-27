@@ -37,6 +37,10 @@ const els = {
   progressMsg: document.getElementById("progress-msg"),
   progressPct: document.getElementById("progress-pct"),
   progressBar: document.getElementById("progress-bar"),
+  subProgressWrap: document.getElementById("sub-progress-wrap"),
+  subProgressLabel: document.getElementById("sub-progress-label"),
+  subProgressPct: document.getElementById("sub-progress-pct"),
+  subProgressBar: document.getElementById("sub-progress-bar"),
   stagePills: document.querySelectorAll(".pill"),
   workspaceCard: document.getElementById("workspace-card"),
   workspaceGrid: document.querySelector(".workspace-grid"),
@@ -175,20 +179,41 @@ els.dropzone.addEventListener("drop", (e) => {
 // Progress pill helper
 const STAGE_ORDER = ["extracting", "transcribing", "translating", "writing"];
 
-function updateProgressUI(stage, pct, message) {
+function updateProgressUI(stage, pct, message, detail = {}) {
   els.progressPct.textContent = `${Math.round(pct)}%`;
   els.progressBar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
   els.progressMsg.textContent = message;
 
+  const stagePct = typeof detail?.stage_progress === "number" ? Math.max(0, Math.min(100, detail.stage_progress)) : null;
+  if (stagePct !== null && (stage === "transcribing" || stage === "translating")) {
+    els.subProgressWrap.classList.remove("hidden");
+    els.subProgressLabel.textContent = stage === "transcribing" ? "Whisper 阶段进度" : "LLM 翻译阶段进度";
+    els.subProgressPct.textContent = `${Math.round(stagePct)}%`;
+    els.subProgressBar.style.width = `${stagePct}%`;
+  } else {
+    els.subProgressWrap.classList.add("hidden");
+  }
+
   const idx = STAGE_ORDER.indexOf(stage);
   els.stagePills.forEach((pill) => {
     const pIdx = STAGE_ORDER.indexOf(pill.dataset.stage);
+    const baseLabel = pill.dataset.label || pill.textContent;
     pill.classList.remove("active", "done");
     if (stage === "completed") {
       pill.classList.add("done");
+      pill.textContent = `${baseLabel} ✓`;
     } else if (idx !== -1) {
-      if (pIdx < idx) pill.classList.add("done");
-      else if (pIdx === idx) pill.classList.add("active");
+      if (pIdx < idx) {
+        pill.classList.add("done");
+        pill.textContent = `${baseLabel} ✓`;
+      } else if (pIdx === idx) {
+        pill.classList.add("active");
+        pill.textContent = stagePct !== null ? `${baseLabel} · ${Math.round(stagePct)}%` : baseLabel;
+      } else {
+        pill.textContent = baseLabel;
+      }
+    } else {
+      pill.textContent = baseLabel;
     }
   });
 }
@@ -260,7 +285,7 @@ function subscribeToJob(jobId) {
 
   es.onmessage = (evt) => {
     const payload = JSON.parse(evt.data);
-    updateProgressUI(payload.stage, payload.progress, payload.message);
+    updateProgressUI(payload.stage, payload.progress, payload.message, payload.detail || {});
   };
 
   es.addEventListener("done", async (evt) => {

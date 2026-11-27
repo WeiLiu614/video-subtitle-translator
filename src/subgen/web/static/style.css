@@ -374,6 +374,32 @@ textarea:focus {
   transition: width 0.25s ease;
 }
 
+.sub-progress-wrap {
+  margin-top: 12px;
+}
+
+.sub-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+}
+
+.sub-pct {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--success);
+  font-variant-numeric: tabular-nums;
+}
+
+.sub-track {
+  height: 6px;
+}
+
+.sub-fill {
+  background: linear-gradient(90deg, #7c5cff, #4f8cff);
+}
+
 .stage-pills {
   display: flex;
   gap: 10px;

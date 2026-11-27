@@ -62,3 +62,61 @@ def test_postprocess_fixes_overlapping_timestamps():
     result = postprocess_segments(segs, language="en")
     assert result[0].end == 3.0
     assert result[1].start == 3.0
+
+
+def test_format_clock_and_whisper_progress_hooks():
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    import tqdm
+
+    from subgen.transcribe import (
+        _capture_mlx_whisper_progress,
+        _format_clock,
+        _make_hf_download_tqdm,
+    )
+
+    assert _format_clock(0) == "00:00"
+    assert _format_clock(75.4) == "01:15"
+    assert _format_clock(3665) == "1:01:05"
+
+    # Test HF download progress tqdm wrapper
+    dl_events: list[tuple[float, str]] = []
+    dl_tqdm_cls = _make_hf_download_tqdm(
+        "mlx-community/whisper-large-v3-turbo",
+        lambda pct, msg: dl_events.append((pct, msg)),
+    )
+    bar = dl_tqdm_cls(total=10 * 1024 * 1024, unit="B", unit_scale=True)
+    bar.update(5 * 1024 * 1024)
+    bar.update(5 * 1024 * 1024)
+    bar.close()
+    assert len(dl_events) >= 1
+    assert "Downloading Whisper model (whisper-large-v3-turbo)" in dl_events[-1][1]
+    assert "(100%)" in dl_events[-1][1]
+
+    # Test MLX Whisper frame progress interception & restoration
+    mlx_events: list[tuple[float, str]] = []
+    fake_tqdm_mod = SimpleNamespace(tqdm=tqdm.tqdm)
+    fake_mlx_transcribe = SimpleNamespace(tqdm=fake_tqdm_mod)
+    fake_mlx_pkg = SimpleNamespace(transcribe=fake_mlx_transcribe)
+
+    with patch.dict(
+        sys.modules,
+        {"mlx_whisper": fake_mlx_pkg, "mlx_whisper.transcribe": fake_mlx_transcribe},
+    ):
+        with _capture_mlx_whisper_progress(
+            duration=120.0,
+            model_label="large-v3-turbo",
+            on_progress=lambda pct, msg: mlx_events.append((pct, msg)),
+        ):
+            with fake_mlx_transcribe.tqdm.tqdm(total=12000, unit="frames", disable=False) as pbar:
+                pbar.update(6000)
+                pbar.update(6000)
+
+        # Verify original tqdm.tqdm was restored cleanly
+        assert fake_mlx_transcribe.tqdm.tqdm is tqdm.tqdm
+
+    assert len(mlx_events) >= 1
+    assert "Whisper (large-v3-turbo · MLX): 02:00 / 02:00 (100%)" in mlx_events[-1][1]
+    assert mlx_events[-1][0] == 98.0
+

@@ -152,11 +152,20 @@
       <div class="progress-track">
         <div id="progress-bar" class="progress-fill" style="width: 0%;"></div>
       </div>
+      <div id="sub-progress-wrap" class="sub-progress-wrap hidden">
+        <div class="sub-progress-meta">
+          <span id="sub-progress-label" class="muted">Whisper 识别进度</span>
+          <span id="sub-progress-pct" class="sub-pct">0%</span>
+        </div>
+        <div class="progress-track sub-track">
+          <div id="sub-progress-bar" class="progress-fill sub-fill" style="width: 0%;"></div>
+        </div>
+      </div>
       <div class="stage-pills">
-        <span class="pill" data-stage="extracting">1. 提取音频</span>
-        <span class="pill" data-stage="transcribing">2. 本地 Whisper 识别</span>
-        <span class="pill" data-stage="translating">3. LLM 上下文翻译</span>
-        <span class="pill" data-stage="writing">4. 生成 .srt</span>
+        <span class="pill" data-stage="extracting" data-label="1. 提取音频">1. 提取音频</span>
+        <span class="pill" data-stage="transcribing" data-label="2. 本地 Whisper 识别">2. 本地 Whisper 识别</span>
+        <span class="pill" data-stage="translating" data-label="3. LLM 上下文翻译">3. LLM 上下文翻译</span>
+        <span class="pill" data-stage="writing" data-label="4. 生成 .srt">4. 生成 .srt</span>
       </div>
     </section>
 

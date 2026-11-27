@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import platform
 import re
+import threading
+import time
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Callable, Iterator, Protocol
 
 from subgen.audio import load_wav_as_float32
 from subgen.config import (
@@ -34,6 +37,117 @@ ProgressCallback = Callable[[float, str], None]
 _JA_BREAK_PUNCT = set("。？！?!、，,")
 _EN_BREAK_PUNCT = set(".?!;:,")
 _EMPTY_PUNCT_RE = re.compile(r"^[\s\W_♪♫★☆・…ー\-]+$", re.UNICODE)
+_MLX_TQDM_LOCK = threading.Lock()
+
+
+def _format_clock(seconds: float) -> str:
+    """Format duration in seconds as `MM:SS` or `H:MM:SS`."""
+    total = max(0, int(round(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _make_hf_download_tqdm(repo_id: str, on_progress: ProgressCallback | None):
+    """Build a tqdm_class for `huggingface_hub.snapshot_download` that forwards download progress."""
+    try:
+        from huggingface_hub.utils import tqdm as base_tqdm  # type: ignore[import-untyped]
+    except Exception:
+        from tqdm import tqdm as base_tqdm  # type: ignore[import-untyped]
+
+    short_name = repo_id.split("/")[-1]
+    state = {"last_emit": 0.0, "last_pct": -1}
+
+    class _SubGenDownloadTqdm(base_tqdm):  # type: ignore[misc,valid-type]
+        def __init__(self, *args, **kwargs):
+            self._is_byte_bar = bool(kwargs.get("unit_scale")) or str(kwargs.get("unit", "")).upper() == "B"
+            self._subgen_total = float(kwargs.get("total") or 0.0)
+            self._subgen_n = float(kwargs.get("initial") or 0.0)
+            kwargs["disable"] = True
+            super().__init__(*args, **kwargs)
+
+        def update(self, n=1):
+            res = super().update(n)
+            self._subgen_n += float(n or 0.0)
+            total = self._subgen_total or float(getattr(self, "total", 0) or 0)
+            if on_progress and total > 0:
+                now = time.monotonic()
+                ratio = min(1.0, max(0.0, self._subgen_n / total))
+                pct_int = int(ratio * 100)
+                if pct_int != state["last_pct"] and (now - state["last_emit"] >= 0.25 or pct_int >= 100):
+                    state["last_emit"] = now
+                    state["last_pct"] = pct_int
+                    # Map model download into 2%..14% of the ASR stage.
+                    asr_pct = 2.0 + ratio * 12.0
+                    if self._is_byte_bar:
+                        done_mb = self._subgen_n / (1024 * 1024)
+                        total_mb = total / (1024 * 1024)
+                        on_progress(
+                            asr_pct,
+                            f"Downloading Whisper model ({short_name}): {done_mb:.1f} / {total_mb:.1f} MB ({pct_int}%)",
+                        )
+                    else:
+                        on_progress(
+                            asr_pct,
+                            f"Preparing Whisper model ({short_name}): {int(self._subgen_n)}/{int(total)} files ({pct_int}%)",
+                        )
+            return res
+
+    return _SubGenDownloadTqdm
+
+
+@contextmanager
+def _capture_mlx_whisper_progress(
+    duration: float,
+    model_label: str,
+    on_progress: ProgressCallback | None,
+) -> Iterator[None]:
+    """Intercept mlx_whisper's internal tqdm frame progress bar to emit live transcription progress."""
+    if on_progress is None:
+        yield
+        return
+
+    import mlx_whisper.transcribe as mlx_transcribe  # type: ignore[import-untyped]
+
+    with _MLX_TQDM_LOCK:
+        original_tqdm = mlx_transcribe.tqdm.tqdm
+        state = {"last_emit": 0.0, "last_pct": -1}
+
+        class _MLXProgressTqdm(original_tqdm):  # type: ignore[misc,valid-type]
+            def __init__(self, *args, **kwargs):
+                self._subgen_unit = str(kwargs.get("unit", ""))
+                self._subgen_total = float(kwargs.get("total") or 0.0)
+                self._subgen_n = 0.0
+                kwargs["disable"] = True
+                super().__init__(*args, **kwargs)
+
+            def update(self, n=1):
+                res = super().update(n)
+                self._subgen_n += float(n or 0.0)
+                if self._subgen_unit == "frames" and self._subgen_total > 0:
+                    ratio = min(1.0, max(0.0, self._subgen_n / self._subgen_total))
+                    pct_int = int(ratio * 100)
+                    now = time.monotonic()
+                    if pct_int != state["last_pct"] and (now - state["last_emit"] >= 0.2 or pct_int >= 100):
+                        state["last_emit"] = now
+                        state["last_pct"] = pct_int
+                        total_sec = duration if duration > 0 else self._subgen_total / 100.0
+                        done_sec = ratio * total_sec
+                        # Map Whisper decoding 0..100% into ASR 15..98%.
+                        asr_pct = min(98.0, 15.0 + ratio * 83.0)
+                        on_progress(
+                            asr_pct,
+                            f"Whisper ({model_label} · MLX): {_format_clock(done_sec)} / {_format_clock(total_sec)} ({pct_int}%)",
+                        )
+                return res
+
+        mlx_transcribe.tqdm.tqdm = _MLXProgressTqdm
+        try:
+            yield
+        finally:
+            mlx_transcribe.tqdm.tqdm = original_tqdm
 
 
 class ASRBackend(Protocol):
@@ -99,13 +213,20 @@ class MLXWhisperBackend:
         if on_progress:
             on_progress(5.0, f"Loading audio and MLX Whisper model ({repo_id})...")
 
-        # Resolve into the configured custom cache directory explicitly so models always land there.
+        # Resolve into the configured custom cache directory explicitly so models always land there
+        # and emit live Hugging Face download progress on first run.
         model_target = repo_id
         candidate_dir = Path(repo_id)
-        if cache_root is not None and not (candidate_dir.exists() and candidate_dir.is_dir()):
+        if not (candidate_dir.exists() and candidate_dir.is_dir()):
             from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
 
-            model_target = str(snapshot_download(repo_id=repo_id, cache_dir=str(cache_root / "hub")))
+            dl_kwargs: dict = {
+                "repo_id": repo_id,
+                "tqdm_class": _make_hf_download_tqdm(repo_id, on_progress),
+            }
+            if cache_root is not None:
+                dl_kwargs["cache_dir"] = str(cache_root / "hub")
+            model_target = str(snapshot_download(**dl_kwargs))
 
         audio = load_wav_as_float32(wav_path)
         duration = float(len(audio)) / 16000.0 if len(audio) > 0 else 0.0
@@ -120,9 +241,13 @@ class MLXWhisperBackend:
             kwargs["language"] = source_lang
 
         if on_progress:
-            on_progress(15.0, f"Transcribing on Apple Silicon GPU with MLX Whisper ({resolved_model})...")
+            on_progress(
+                15.0,
+                f"Whisper ({resolved_model} · MLX): 00:00 / {_format_clock(duration)} (0%)",
+            )
 
-        result = mlx_whisper.transcribe(audio, **kwargs)
+        with _capture_mlx_whisper_progress(duration, resolved_model, on_progress):
+            result = mlx_whisper.transcribe(audio, **kwargs)
         detected_lang = str(result.get("language") or (source_lang if source_lang != "auto" else "en"))
         raw_segments = result.get("segments") or []
 
@@ -230,7 +355,7 @@ class FasterWhisperBackend:
         if on_progress:
             on_progress(
                 15.0,
-                f"Transcribing with faster-whisper ({resolved_model} on {active_device.upper()} / {active_compute})...",
+                f"Whisper ({resolved_model} · {active_device.upper()}): 00:00 / {_format_clock(duration)} (0%)",
             )
 
         seg_iter, info = model.transcribe(audio, **kwargs)
@@ -261,8 +386,12 @@ class FasterWhisperBackend:
                 )
             )
             if on_progress and total_duration > 0:
-                pct = min(98.0, 15.0 + (float(seg.end) / total_duration) * 83.0)
-                on_progress(pct, f"Transcribed {seg.end:.1f}s / {total_duration:.1f}s")
+                ratio = min(1.0, max(0.0, float(seg.end) / total_duration))
+                pct = min(98.0, 15.0 + ratio * 83.0)
+                on_progress(
+                    pct,
+                    f"Whisper ({resolved_model} · {active_device.upper()}): {_format_clock(float(seg.end))} / {_format_clock(total_duration)} ({int(ratio * 100)}%)",
+                )
 
         if on_progress:
             on_progress(100.0, f"Transcription complete ({len(segments)} raw segments, lang={detected_lang})")
@@ -283,14 +412,17 @@ class OpenVINOWhisperBackend:
         self.device = device
         self.compute_type = compute_type
 
-    def _resolve_local_model_dir(self, repo_or_path: str) -> str:
+    def _resolve_local_model_dir(self, repo_or_path: str, on_progress: ProgressCallback | None = None) -> str:
         cache_root = configure_model_cache()
         candidate = Path(repo_or_path)
         if candidate.exists() and candidate.is_dir():
             return str(candidate)
         from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
 
-        dl_kwargs: dict = {"repo_id": repo_or_path}
+        dl_kwargs: dict = {
+            "repo_id": repo_or_path,
+            "tqdm_class": _make_hf_download_tqdm(repo_or_path, on_progress),
+        }
         if cache_root is not None:
             dl_kwargs["cache_dir"] = str(cache_root / "hub")
         return str(snapshot_download(**dl_kwargs))
@@ -328,7 +460,7 @@ class OpenVINOWhisperBackend:
         if on_progress:
             on_progress(5.0, f"Preparing OpenVINO Whisper model ({repo_id})...")
 
-        model_dir = self._resolve_local_model_dir(repo_id)
+        model_dir = self._resolve_local_model_dir(repo_id, on_progress=on_progress)
         pipe, active_device = self._create_pipeline(model_dir, on_progress=on_progress)
 
         audio = load_wav_as_float32(wav_path)
@@ -343,9 +475,35 @@ class OpenVINOWhisperBackend:
             gen_kwargs["language"] = f"<|{source_lang}|>"
 
         if on_progress:
-            on_progress(18.0, f"Transcribing with OpenVINO Whisper ({resolved_alias} on Intel {active_device})...")
+            on_progress(
+                18.0,
+                f"Whisper ({resolved_alias} · Intel {active_device}): 00:00 / {_format_clock(duration)} (0%)",
+            )
 
-        result = pipe.generate(raw_speech, **gen_kwargs)
+        # Emit incremental progress if this OpenVINO GenAI build supports streamer callbacks.
+        if on_progress:
+            token_state = {"chars": 0, "last_emit": 0.0}
+            est_chars = max(40.0, duration * 10.0)
+
+            def _ov_streamer(subword: str) -> bool:
+                token_state["chars"] += len(subword or "")
+                now = time.monotonic()
+                if now - token_state["last_emit"] >= 0.4:
+                    token_state["last_emit"] = now
+                    ratio = min(0.95, token_state["chars"] / est_chars)
+                    pct = min(96.0, 18.0 + ratio * 78.0)
+                    on_progress(
+                        pct,
+                        f"Whisper ({resolved_alias} · Intel {active_device}): transcribing (~{int(ratio * 100)}%)",
+                    )
+                return False
+
+            try:
+                result = pipe.generate(raw_speech, streamer=_ov_streamer, **gen_kwargs)
+            except TypeError:
+                result = pipe.generate(raw_speech, **gen_kwargs)
+        else:
+            result = pipe.generate(raw_speech, **gen_kwargs)
         raw_chunks = getattr(result, "chunks", None) or []
 
         segments: list[SubtitleSegment] = []

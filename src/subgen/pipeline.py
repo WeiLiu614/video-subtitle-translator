@@ -98,8 +98,8 @@ def run_pipeline(
             emit("transcribing", 15.0, f"Starting local Whisper ({plan_desc})...")
 
             def on_asr_progress(pct: float, msg: str) -> None:
-                # Map ASR 0..100% into overall 15..55%
-                emit("transcribing", 15.0 + pct * 0.40, msg)
+                # Map ASR 0..100% into overall 15..55%, while exposing raw stage_progress (0..100%)
+                emit("transcribing", 15.0 + pct * 0.40, msg, {"stage_progress": round(pct, 1)})
 
             asr_result = backend.transcribe(
                 wav_path,
@@ -151,8 +151,8 @@ def run_pipeline(
     )
 
     def on_translate_progress(pct: float, msg: str) -> None:
-        # Map translation 0..100% into overall 55..95%
-        emit("translating", 55.0 + pct * 0.40, msg)
+        # Map translation 0..100% into overall 55..95%, while exposing raw stage_progress (0..100%)
+        emit("translating", 55.0 + pct * 0.40, msg, {"stage_progress": round(pct, 1)})
 
     emit("translating", 56.0, f"Translating {len(segments)} cues to Simplified Chinese...")
     translated_segments = translator.translate_segments(
